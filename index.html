@@ -84,6 +84,8 @@ header.topbar .navlinks a,header.topbar .navlinks button{color:var(--ink-soft);b
 .disc{width:42px;height:42px;border-radius:50%;background:conic-gradient(var(--wine),var(--rose-soft),var(--wine));margin:.4rem auto .4rem;box-shadow:0 0 0 4px var(--card);}
 .disc.playing{animation:spin 4s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
+.embed-box{display:none;width:100%;border-radius:10px;overflow:hidden;margin-bottom:.6rem;}
+.embed-box.active{display:block;}
 #trackName{text-align:center;font-size:.8rem;margin:.2rem 0 .5rem;}
 .prog{height:4px;background:var(--rose-soft);border-radius:4px;overflow:hidden;cursor:pointer;margin-bottom:.6rem;}
 #progFill{height:100%;width:0%;background:var(--wine);}
@@ -232,9 +234,9 @@ th{color:var(--ink-soft);font-weight:600;}
   <div style="display:flex;justify-content:space-between;font-size:.78rem;color:var(--ink-soft);"><span>♪ listening together</span></div>
   <div class="disc" id="disc">♪</div>
   <div id="trackName">Add a song below</div>
-  <div id="ytPlayer" style="width:1px;height:1px;overflow:hidden;position:absolute;"></div>
-  <div style="width:1px;height:1px;overflow:hidden;position:absolute;"><iframe id="scPlayer" width="1" height="1" allow="autoplay"></iframe></div>
-  <div id="spPlayer" style="width:1px;height:1px;overflow:hidden;position:absolute;"></div>
+  <div id="ytPlayer" class="embed-box"></div>
+  <div id="scWrap" class="embed-box"><iframe id="scPlayer" width="100%" height="80" allow="autoplay" style="border:none;"></iframe></div>
+  <div id="spPlayer" class="embed-box"></div>
   <div class="prog" id="progBar"><div id="progFill"></div></div>
   <div class="mctrls"><button id="playBtn" onclick="togglePlay()">▶</button></div>
   <div class="track-add">
@@ -621,7 +623,7 @@ function loadYoutubeApi(){
   window.onYouTubeIframeAPIReady=()=>{ ytReady=true; if(ytPendingVideoId) createYtPlayer(ytPendingVideoId); };
 }
 function createYtPlayer(videoId){
-  ytPlayer=new YT.Player('ytPlayer',{height:'1',width:'1',videoId,playerVars:{controls:0,disablekb:1}});
+  ytPlayer=new YT.Player('ytPlayer',{height:'90',width:'230',videoId,playerVars:{controls:1,disablekb:1}});
 }
 function ensureYoutube(videoId, cb){
   if(!ytReady){ ytPendingVideoId=videoId; loadYoutubeApi(); setTimeout(()=>ensureYoutube(videoId,cb),600); return; }
@@ -660,7 +662,7 @@ function loadSpotifyApi(cb){
 function ensureSpotify(uri, cb){
   loadSpotifyApi(()=>{
     if(spotifyCtl){ spotifyCtl.loadUri(uri); cb(); return; }
-    window.Spotify.createController(document.getElementById('spPlayer'), {uri, width:'1', height:'1'}, controller=>{
+    window.Spotify.createController(document.getElementById('spPlayer'), {uri, width:'100%', height:'152'}, controller=>{
       spotifyCtl=controller;
       controller.addListener('playback_update', e=>{
         spotifyLastPos=(e.data.position||0)/1000; spotifyDuration=(e.data.duration||0)/1000;
@@ -668,6 +670,13 @@ function ensureSpotify(uri, cb){
       cb();
     });
   });
+}
+
+function showEmbed(type){
+  document.getElementById('ytPlayer').classList.toggle('active', type==='youtube');
+  document.getElementById('scWrap').classList.toggle('active', type==='soundcloud');
+  document.getElementById('spPlayer').classList.toggle('active', type==='spotify');
+  document.getElementById('disc').style.display = type==='audio' ? 'block' : 'none';
 }
 
 function listenMusic(){
@@ -681,6 +690,7 @@ function listenMusic(){
     const elapsed=d.updatedAt? (Date.now()-d.updatedAt.toMillis())/1000:0;
     const expected=d.playing? (d.position||0)+elapsed : (d.position||0);
     curType=d.type;
+    showEmbed(d.type);
     suppressWrite=true;
     if(d.type==='youtube'){
       ensureYoutube(d.videoId, ()=>{
@@ -718,14 +728,28 @@ window.addTrack=async function(){
   const info=PLATFORM_INFO[t.type];
   if(info) toast(info.label+': '+info.note);
 };
+async function waitForPlayer(type){
+  const start=Date.now();
+  while(Date.now()-start<7000){
+    if(type==='youtube' && ytPlayer && ytPlayer.getPlayerState) return true;
+    if(type==='soundcloud' && scWidget) return true;
+    if(type==='spotify' && spotifyCtl) return true;
+    if(type==='audio') return true;
+    await new Promise(r=>setTimeout(r,200));
+  }
+  return false;
+}
 window.togglePlay=async function(){
   const mref=doc(db,'groups',myGroupId,'music','state');
   const snap=await getDoc(mref);
   if(!snap.exists() || !snap.data().url){ toast('add a song first'); return; }
-  const d=snap.data(); const newPlaying=!d.playing; let position=0;
-  if(d.type==='youtube' && ytPlayer){ position=ytPlayer.getCurrentTime()||0; newPlaying? ytPlayer.playVideo():ytPlayer.pauseVideo(); }
-  else if(d.type==='soundcloud' && scWidget){ position=scLastPos; newPlaying? scWidget.play():scWidget.pause(); }
-  else if(d.type==='spotify' && spotifyCtl){ position=spotifyLastPos; newPlaying? spotifyCtl.resume():spotifyCtl.pause(); }
+  const d=snap.data();
+  const ready=await waitForPlayer(d.type);
+  if(!ready){ toast("still loading that link — give it a second and try again"); return; }
+  const newPlaying=!d.playing; let position=0;
+  if(d.type==='youtube'){ position=ytPlayer.getCurrentTime()||0; newPlaying? ytPlayer.playVideo():ytPlayer.pauseVideo(); }
+  else if(d.type==='soundcloud'){ position=scLastPos; newPlaying? scWidget.play():scWidget.pause(); }
+  else if(d.type==='spotify'){ position=spotifyLastPos; newPlaying? spotifyCtl.resume():spotifyCtl.pause(); }
   else { position=audioEl.currentTime||0; if(newPlaying) audioEl.play().catch(()=>toast("couldn't play that link")); else audioEl.pause(); }
   await updateDoc(mref,{playing:newPlaying,position,updatedAt:serverTimestamp(),updatedBy:myNickname});
 };
