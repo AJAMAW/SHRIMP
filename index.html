@@ -31,6 +31,10 @@ input,textarea{font-family:'Lora',serif;padding:.8rem 1rem;border-radius:12px;bo
 .field{margin-bottom:.8rem;}
 .center-card{max-width:380px;margin:4rem auto;background:var(--card);border:1px solid var(--card-border);border-radius:22px;padding:2.4rem;box-shadow:var(--shadow-sm);text-align:center;}
 .center-card h1{font-family:'Parisienne',cursive;color:var(--wine);font-size:2.6rem;}
+.group-pick{border:1px solid var(--card-border);border-radius:14px;padding:.9rem 1.1rem;margin-bottom:.6rem;display:flex;justify-content:space-between;align-items:center;cursor:pointer;text-align:left;background:var(--card);}
+.group-pick:hover{border-color:var(--wine);}
+.group-pick b{font-family:'Playfair Display',serif;color:var(--wine);font-weight:500;}
+.group-pick small{color:var(--ink-soft);display:block;}
 .tabs{display:flex;gap:.5rem;margin-bottom:1.2rem;}
 .tabs button{flex:1;background:none;border:1px solid var(--card-border);border-radius:999px;padding:.6rem;color:var(--ink-soft);}
 .tabs button.active{background:var(--wine);color:#fff;border-color:var(--wine);}
@@ -123,7 +127,13 @@ th{color:var(--ink-soft);font-weight:600;}
     <div class="field"><input id="authPass" type="password" placeholder="Password (6+ characters)"></div>
     <button class="btn" style="width:100%" onclick="doAuth()">Continue</button>
     <div class="err" id="authErr"></div>
+    <p style="margin-top:.8rem;"><a href="#" style="color:var(--ink-soft);font-size:.82rem;" onclick="openForgotPassword();return false;">Forgot password?</a></p>
   </div>
+</div>
+
+<!-- ============ SIMPLE MODAL ============ -->
+<div id="modalOverlay" class="hide" style="position:fixed;inset:0;background:rgba(58,42,46,.45);z-index:100;display:flex;align-items:center;justify-content:center;padding:1.5rem;" onclick="if(event.target===this) closeModal()">
+  <div id="modalBox" class="center-card" style="margin:0;max-width:360px;"></div>
 </div>
 
 <!-- ============ NICKNAME SCREEN ============ -->
@@ -140,7 +150,8 @@ th{color:var(--ink-soft);font-weight:600;}
 <!-- ============ GROUP SCREEN ============ -->
 <div id="groupScreen" class="hide">
   <div class="center-card" style="max-width:420px;">
-    <h1>Your space</h1>
+    <h1>Your spaces</h1>
+    <div id="myGroupsList" style="margin-bottom:1rem;"></div>
     <p style="color:var(--ink-soft);font-size:.9rem;">Start a new group, or join one with an invite code.</p>
     <div class="field"><input id="groupNameInput" placeholder="Name your group (e.g. Me & Kearah)"></div>
     <button class="btn" style="width:100%;margin-bottom:1rem;" onclick="createGroup()">Create group</button>
@@ -158,6 +169,8 @@ th{color:var(--ink-soft);font-weight:600;}
   <div class="navlinks">
     <span id="whoAmI"></span>
     <span id="inviteCodeLabel" title="share this code to invite others"></span>
+    <a href="#" onclick="switchGroup();return false;">Switch group</a>
+    <a href="#" onclick="openChangePassword();return false;">Account</a>
     <a href="#" id="founderLink" class="hide" onclick="showFounder();return false;">Founder view</a>
     <button onclick="doLogout()">Log out</button>
   </div>
@@ -219,10 +232,13 @@ th{color:var(--ink-soft);font-weight:600;}
   <div style="display:flex;justify-content:space-between;font-size:.78rem;color:var(--ink-soft);"><span>♪ listening together</span></div>
   <div class="disc" id="disc">♪</div>
   <div id="trackName">Add a song below</div>
+  <div id="ytPlayer" style="width:1px;height:1px;overflow:hidden;position:absolute;"></div>
+  <div style="width:1px;height:1px;overflow:hidden;position:absolute;"><iframe id="scPlayer" width="1" height="1" allow="autoplay"></iframe></div>
+  <div id="spPlayer" style="width:1px;height:1px;overflow:hidden;position:absolute;"></div>
   <div class="prog" id="progBar"><div id="progFill"></div></div>
   <div class="mctrls"><button id="playBtn" onclick="togglePlay()">▶</button></div>
   <div class="track-add">
-    <input id="trackUrl" placeholder="paste a direct audio URL">
+    <input id="trackUrl" placeholder="YouTube, SoundCloud, Spotify track, or audio URL">
     <button onclick="addTrack()">add</button>
   </div>
   <audio id="audioEl"></audio>
@@ -255,7 +271,8 @@ th{color:var(--ink-soft);font-weight:600;}
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
-  onAuthStateChanged, signOut
+  onAuthStateChanged, signOut, sendPasswordResetEmail,
+  EmailAuthProvider, reauthenticateWithCredential, updatePassword
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot, collection,
@@ -311,6 +328,51 @@ function friendlyError(e){
 }
 window.doLogout=async function(){ await signOut(auth); location.reload(); };
 
+/* ---------- modal + account security ---------- */
+function openModal(html){ document.getElementById('modalBox').innerHTML=html; document.getElementById('modalOverlay').classList.remove('hide'); }
+window.closeModal=function(){ document.getElementById('modalOverlay').classList.add('hide'); };
+
+window.openForgotPassword=function(){
+  const prefill=document.getElementById('authEmail').value.trim();
+  openModal(`
+    <h1 style="font-size:1.8rem;">Reset password</h1>
+    <p style="color:var(--ink-soft);font-size:.85rem;">We'll email you a link to set a new password.</p>
+    <div class="field"><input id="resetEmail" type="email" placeholder="Email" value="${prefill.replace(/"/g,'')}"></div>
+    <button class="btn" style="width:100%" onclick="sendReset()">Send reset link</button>
+    <div class="err" id="resetErr"></div>
+  `);
+};
+window.sendReset=async function(){
+  const email=document.getElementById('resetEmail').value.trim();
+  const errEl=document.getElementById('resetErr');
+  if(!email){ errEl.textContent='Enter your email.'; return; }
+  try{ await sendPasswordResetEmail(auth,email); errEl.style.color='var(--wine)'; errEl.textContent='Check your inbox for a reset link.'; }
+  catch(e){ errEl.textContent=friendlyError(e); }
+};
+
+window.openChangePassword=function(){
+  openModal(`
+    <h1 style="font-size:1.8rem;">Change password</h1>
+    <div class="field"><input id="curPass" type="password" placeholder="Current password"></div>
+    <div class="field"><input id="newPass" type="password" placeholder="New password (6+ characters)"></div>
+    <button class="btn" style="width:100%" onclick="doChangePassword()">Update password</button>
+    <button class="btn-ghost" style="width:100%;margin-top:.6rem;" onclick="closeModal()">Cancel</button>
+    <div class="err" id="changeErr"></div>
+  `);
+};
+window.doChangePassword=async function(){
+  const cur=document.getElementById('curPass').value;
+  const next=document.getElementById('newPass').value;
+  const errEl=document.getElementById('changeErr');
+  if(!cur||!next){ errEl.textContent='Fill in both fields.'; return; }
+  try{
+    const cred=EmailAuthProvider.credential(currentUser.email,cur);
+    await reauthenticateWithCredential(currentUser,cred);
+    await updatePassword(currentUser,next);
+    closeModal(); toast('Password updated.');
+  }catch(e){ errEl.textContent=friendlyError(e); }
+};
+
 onAuthStateChanged(auth, async (user)=>{
   if(!user){ show('authScreen'); return; }
   currentUser=user;
@@ -324,8 +386,9 @@ onAuthStateChanged(auth, async (user)=>{
   const data=usnap.data();
   if(!data.nickname){ show('nicknameScreen'); return; }
   myNickname=data.nickname;
-  if(!data.groupId){ show('groupScreen'); return; }
-  await enterGroup(data.groupId);
+  const ids=data.groupIds||(data.groupId?[data.groupId]:[]);
+  if(!ids.length){ show('groupScreen'); renderGroupsList([]); return; }
+  await enterGroup(data.lastGroupId && ids.includes(data.lastGroupId) ? data.lastGroupId : ids[0]);
 });
 
 window.saveNickname=async function(){
@@ -333,10 +396,30 @@ window.saveNickname=async function(){
   if(!val){document.getElementById('nickErr').textContent='Please enter a name.';return;}
   myNickname=val;
   await updateDoc(doc(db,'users',currentUser.uid),{nickname:val});
-  show('groupScreen');
+  show('groupScreen'); renderGroupsList([]);
 };
 
 function genCode(){ return Math.random().toString(36).slice(2,8).toUpperCase(); }
+
+window.switchGroup=async function(){
+  if(unsubNotes){unsubNotes(); unsubNotes=null;}
+  if(unsubMusic){unsubMusic(); unsubMusic=null;}
+  const usnap=await getDoc(doc(db,'users',currentUser.uid));
+  const ids=usnap.data().groupIds||[];
+  show('groupScreen'); renderGroupsList(ids);
+};
+async function renderGroupsList(ids){
+  const wrap=document.getElementById('myGroupsList'); wrap.innerHTML='';
+  if(!ids.length) return;
+  const groups=await Promise.all(ids.map(id=>getDoc(doc(db,'groups',id))));
+  groups.forEach((g,i)=>{
+    if(!g.exists()) return;
+    const d=g.data(); const card=document.createElement('div'); card.className='group-pick';
+    card.innerHTML=`<span><b>${d.name}</b><small>${(d.memberIds||[]).length} member${(d.memberIds||[]).length===1?'':'s'} · code ${d.inviteCode}</small></span><span>enter →</span>`;
+    card.onclick=()=>enterGroup(ids[i]);
+    wrap.appendChild(card);
+  });
+}
 
 window.createGroup=async function(){
   const name=document.getElementById('groupNameInput').value.trim()||'Our space';
@@ -348,7 +431,7 @@ window.createGroup=async function(){
     countdowns:{meet:{label:'until we meet again',date:defaultDate(14)},anniv:{label:'until our anniversary',date:defaultDate(60)}}
   });
   await setDoc(doc(db,'inviteCodes',code),{groupId:gref.id,groupName:name});
-  await updateDoc(doc(db,'users',currentUser.uid),{groupId:gref.id});
+  await updateDoc(doc(db,'users',currentUser.uid),{groupIds:arrayUnion(gref.id)});
   await enterGroup(gref.id);
 };
 window.joinGroup=async function(){
@@ -362,12 +445,14 @@ window.joinGroup=async function(){
     memberIds:arrayUnion(currentUser.uid),
     [`memberNames.${currentUser.uid}`]:myNickname
   });
-  await updateDoc(doc(db,'users',currentUser.uid),{groupId});
+  await updateDoc(doc(db,'users',currentUser.uid),{groupIds:arrayUnion(groupId)});
   await enterGroup(groupId);
 };
 function defaultDate(days){ const d=new Date(); d.setDate(d.getDate()+days); return d.toISOString().slice(0,10); }
 
 async function enterGroup(groupId){
+  if(unsubNotes){unsubNotes(); unsubNotes=null;}
+  if(unsubMusic){unsubMusic(); unsubMusic=null;}
   myGroupId=groupId;
   const gsnap=await getDoc(doc(db,'groups',groupId));
   myGroupData=gsnap.data();
@@ -375,6 +460,7 @@ async function enterGroup(groupId){
   document.getElementById('heroTitle').textContent='welcome, '+myNickname;
   document.getElementById('whoAmI').textContent='signed in as '+myNickname;
   document.getElementById('inviteCodeLabel').textContent='invite code: '+myGroupData.inviteCode;
+  await updateDoc(doc(db,'users',currentUser.uid),{lastGroupId:groupId});
   if(currentUser.email===FOUNDER_EMAIL) document.getElementById('founderLink').classList.remove('hide');
   show('appScreen');
   initGarden(); renderClocks(); listenNotes(); listenMemories(); listenMusic();
@@ -497,46 +583,179 @@ memInput.addEventListener('change',e=>{
 });
 document.body.appendChild(memInput);
 
-/* ---------- music (synced) ---------- */
+/* ---------- music (synced, multi-platform) ---------- */
 const audioEl=document.getElementById('audioEl');
+const PLATFORM_INFO={
+  youtube:{label:'YouTube', note:'Free — plays in full for everyone, no login needed.'},
+  soundcloud:{label:'SoundCloud', note:'Free — plays in full for public tracks, no login needed.'},
+  spotify:{label:'Spotify', note:'Needs Premium — each listener must be logged into Spotify with a Premium account in this browser tab, or only a ~30-second preview plays.'},
+  audio:{label:'Direct link', note:'Plays in full, as long as the link points straight to an audio file.'}
+};
+let curType=null, ytPlayer=null, ytReady=false, ytPendingVideoId=null;
+let scWidget=null, scReady=false, scLastPos=0;
+let spotifyCtl=null, spotifyReady=false, spotifyPending=null, spotifyLastPos=0, spotifyDuration=0;
+
+function extractYoutubeId(url){
+  const m=url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{11})/);
+  return m? m[1]:null;
+}
+function extractSpotify(url){
+  const m=url.match(/open\.spotify\.com\/(track|episode)\/([A-Za-z0-9]+)/);
+  return m? {kind:m[1], id:m[2]}:null;
+}
+function detectTrack(url){
+  const yt=extractYoutubeId(url);
+  if(yt) return {type:'youtube', videoId:yt, url, name:'YouTube track'};
+  if(url.includes('soundcloud.com')) return {type:'soundcloud', url, name:'SoundCloud track'};
+  const sp=extractSpotify(url);
+  if(sp) return {type:'spotify', spotifyKind:sp.kind, spotifyId:sp.id, url, name:'Spotify track'};
+  if(url.includes('open.spotify.com')) return {type:'spotify-unsupported'};
+  return {type:'audio', url, name:url.split('/').pop().slice(0,26)||'track'};
+}
+
+/* --- YouTube --- */
+function loadYoutubeApi(){
+  if(window.YT && window.YT.Player){ ytReady=true; return; }
+  const tag=document.createElement('script'); tag.src='https://www.youtube.com/iframe_api';
+  document.head.appendChild(tag);
+  window.onYouTubeIframeAPIReady=()=>{ ytReady=true; if(ytPendingVideoId) createYtPlayer(ytPendingVideoId); };
+}
+function createYtPlayer(videoId){
+  ytPlayer=new YT.Player('ytPlayer',{height:'1',width:'1',videoId,playerVars:{controls:0,disablekb:1}});
+}
+function ensureYoutube(videoId, cb){
+  if(!ytReady){ ytPendingVideoId=videoId; loadYoutubeApi(); setTimeout(()=>ensureYoutube(videoId,cb),600); return; }
+  if(!ytPlayer){ createYtPlayer(videoId); setTimeout(cb,900); return; }
+  const cur=ytPlayer.getVideoData && ytPlayer.getVideoData().video_id;
+  if(cur!==videoId) ytPlayer.loadVideoById(videoId);
+  cb();
+}
+
+/* --- SoundCloud --- */
+function loadSoundcloudApi(cb){
+  if(window.SC){ scReady=true; cb(); return; }
+  const tag=document.createElement('script'); tag.src='https://w.soundcloud.com/player/api.js';
+  tag.onload=()=>{ scReady=true; cb(); };
+  document.head.appendChild(tag);
+}
+function ensureSoundcloud(url, cb){
+  loadSoundcloudApi(()=>{
+    const iframe=document.getElementById('scPlayer');
+    iframe.src='https://w.soundcloud.com/player/?url='+encodeURIComponent(url)+'&auto_play=false&visual=false';
+    scWidget=SC.Widget(iframe);
+    scWidget.bind(SC.Widget.Events.READY, cb);
+    scWidget.bind(SC.Widget.Events.PLAY_PROGRESS, e=>{ scLastPos=(e.currentPosition||0)/1000; });
+  });
+}
+
+/* --- Spotify --- */
+function loadSpotifyApi(cb){
+  if(window.Spotify){ spotifyReady=true; cb(); return; }
+  window.onSpotifyIframeApiReady=(IFrameAPI)=>{
+    window.Spotify=IFrameAPI; spotifyReady=true; cb();
+  };
+  const tag=document.createElement('script'); tag.src='https://open.spotify.com/embed/iframe-api/v1';
+  document.head.appendChild(tag);
+}
+function ensureSpotify(uri, cb){
+  loadSpotifyApi(()=>{
+    if(spotifyCtl){ spotifyCtl.loadUri(uri); cb(); return; }
+    window.Spotify.createController(document.getElementById('spPlayer'), {uri, width:'1', height:'1'}, controller=>{
+      spotifyCtl=controller;
+      controller.addListener('playback_update', e=>{
+        spotifyLastPos=(e.data.position||0)/1000; spotifyDuration=(e.data.duration||0)/1000;
+      });
+      cb();
+    });
+  });
+}
+
 function listenMusic(){
   const mref=doc(db,'groups',myGroupId,'music','state');
   if(unsubMusic) unsubMusic();
   unsubMusic=onSnapshot(mref,snap=>{
     if(!snap.exists()) return;
     const d=snap.data();
-    document.getElementById('trackName').textContent=d.name||'Add a song below';
-    if(d.url && audioEl.src!==d.url) audioEl.src=d.url;
+    const info=PLATFORM_INFO[d.type]||{};
+    document.getElementById('trackName').textContent=(info.label? '['+info.label+'] ':'')+(d.name||'Add a song below');
     const elapsed=d.updatedAt? (Date.now()-d.updatedAt.toMillis())/1000:0;
     const expected=d.playing? (d.position||0)+elapsed : (d.position||0);
+    curType=d.type;
     suppressWrite=true;
-    if(Math.abs((audioEl.currentTime||0)-expected)>1.5) audioEl.currentTime=expected;
-    if(d.playing && audioEl.paused) audioEl.play().catch(()=>{});
-    if(!d.playing && !audioEl.paused) audioEl.pause();
+    if(d.type==='youtube'){
+      ensureYoutube(d.videoId, ()=>{
+        if(Math.abs((ytPlayer.getCurrentTime()||0)-expected)>1.5) ytPlayer.seekTo(expected,true);
+        d.playing? ytPlayer.playVideo() : ytPlayer.pauseVideo();
+      });
+    } else if(d.type==='soundcloud'){
+      ensureSoundcloud(d.url, ()=>{
+        if(Math.abs(scLastPos-expected)>1.5) scWidget.seekTo(expected*1000);
+        d.playing? scWidget.play() : scWidget.pause();
+      });
+    } else if(d.type==='spotify'){
+      ensureSpotify('spotify:'+d.spotifyKind+':'+d.spotifyId, ()=>{
+        if(Math.abs(spotifyLastPos-expected)>1.5) spotifyCtl.seek(expected*1000);
+        d.playing? spotifyCtl.resume() : spotifyCtl.pause();
+      });
+    } else {
+      if(d.url && audioEl.src!==d.url) audioEl.src=d.url;
+      if(Math.abs((audioEl.currentTime||0)-expected)>1.5) audioEl.currentTime=expected;
+      d.playing? audioEl.play().catch(()=>{}) : audioEl.pause();
+    }
     document.getElementById('playBtn').textContent=d.playing?'⏸':'▶';
     document.getElementById('disc').classList.toggle('playing',!!d.playing);
     suppressWrite=false;
   });
 }
+
 window.addTrack=async function(){
   const inp=document.getElementById('trackUrl'); const url=inp.value.trim(); if(!url) return;
-  const name=url.split('/').pop().slice(0,26)||'track'; inp.value='';
-  await setDoc(doc(db,'groups',myGroupId,'music','state'),{url,name,playing:false,position:0,updatedAt:serverTimestamp(),updatedBy:myNickname},{merge:true});
+  inp.value='';
+  const t=detectTrack(url);
+  if(t.type==='spotify-unsupported'){ toast('Paste a link to a single Spotify track (not an album or playlist) for now.'); return; }
+  await setDoc(doc(db,'groups',myGroupId,'music','state'),
+    {...t, playing:false, position:0, updatedAt:serverTimestamp(), updatedBy:myNickname},{merge:true});
+  const info=PLATFORM_INFO[t.type];
+  if(info) toast(info.label+': '+info.note);
 };
 window.togglePlay=async function(){
-  if(!audioEl.src){ toast('add a song first'); return; }
-  const newPlaying=audioEl.paused;
-  if(newPlaying) audioEl.play().catch(()=>toast("couldn't play that link")); else audioEl.pause();
-  await updateDoc(doc(db,'groups',myGroupId,'music','state'),{playing:newPlaying,position:audioEl.currentTime,updatedAt:serverTimestamp(),updatedBy:myNickname});
+  const mref=doc(db,'groups',myGroupId,'music','state');
+  const snap=await getDoc(mref);
+  if(!snap.exists() || !snap.data().url){ toast('add a song first'); return; }
+  const d=snap.data(); const newPlaying=!d.playing; let position=0;
+  if(d.type==='youtube' && ytPlayer){ position=ytPlayer.getCurrentTime()||0; newPlaying? ytPlayer.playVideo():ytPlayer.pauseVideo(); }
+  else if(d.type==='soundcloud' && scWidget){ position=scLastPos; newPlaying? scWidget.play():scWidget.pause(); }
+  else if(d.type==='spotify' && spotifyCtl){ position=spotifyLastPos; newPlaying? spotifyCtl.resume():spotifyCtl.pause(); }
+  else { position=audioEl.currentTime||0; if(newPlaying) audioEl.play().catch(()=>toast("couldn't play that link")); else audioEl.pause(); }
+  await updateDoc(mref,{playing:newPlaying,position,updatedAt:serverTimestamp(),updatedBy:myNickname});
 };
 audioEl.addEventListener('timeupdate',()=>{
+  if(curType!=='audio') return;
   const p=audioEl.duration? audioEl.currentTime/audioEl.duration*100:0;
   document.getElementById('progFill').style.width=p+'%';
 });
+setInterval(()=>{
+  if(curType==='youtube' && ytPlayer && ytPlayer.getDuration){
+    const dur=ytPlayer.getDuration(); const p=dur? (ytPlayer.getCurrentTime()/dur*100):0;
+    document.getElementById('progFill').style.width=p+'%';
+  } else if(curType==='soundcloud' && scWidget){
+    scWidget.getDuration(dur=>{ document.getElementById('progFill').style.width=(dur? scLastPos*1000/dur*100:0)+'%'; });
+  } else if(curType==='spotify' && spotifyDuration){
+    document.getElementById('progFill').style.width=(spotifyLastPos/spotifyDuration*100)+'%';
+  }
+},1000);
 document.getElementById('progBar').addEventListener('click',async e=>{
   const rect=e.currentTarget.getBoundingClientRect(); const pct=(e.clientX-rect.left)/rect.width;
-  if(audioEl.duration){ audioEl.currentTime=pct*audioEl.duration;
-    await updateDoc(doc(db,'groups',myGroupId,'music','state'),{position:audioEl.currentTime,updatedAt:serverTimestamp(),updatedBy:myNickname});
+  const mref=doc(db,'groups',myGroupId,'music','state');
+  if(curType==='audio' && audioEl.duration){
+    audioEl.currentTime=pct*audioEl.duration;
+    await updateDoc(mref,{position:audioEl.currentTime,updatedAt:serverTimestamp(),updatedBy:myNickname});
+  } else if(curType==='youtube' && ytPlayer && ytPlayer.getDuration()){
+    const t=pct*ytPlayer.getDuration(); ytPlayer.seekTo(t,true);
+    await updateDoc(mref,{position:t,updatedAt:serverTimestamp(),updatedBy:myNickname});
+  } else if(curType==='spotify' && spotifyDuration){
+    const t=pct*spotifyDuration; spotifyCtl.seek(t*1000);
+    await updateDoc(mref,{position:t,updatedAt:serverTimestamp(),updatedBy:myNickname});
   }
 });
 
