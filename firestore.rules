@@ -1,0 +1,49 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // EDIT THIS to the exact email address you sign up with — it must match
+    // FOUNDER_EMAIL in index.html exactly.
+    function isFounder() {
+      return request.auth != null && request.auth.token.email == "PUT-YOUR-SIGNUP-EMAIL-HERE@example.com";
+    }
+    function signedIn() { return request.auth != null; }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isFounder());
+      allow create, update: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /inviteCodes/{code} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+    }
+
+    match /groups/{groupId} {
+      allow read: if signedIn() && (isFounder() || request.auth.uid in resource.data.memberIds);
+      allow create: if signedIn();
+      allow update: if signedIn() && (
+        request.auth.uid in resource.data.memberIds ||
+        request.auth.uid in request.resource.data.memberIds
+      );
+
+      match /notes/{noteId} {
+        allow read, create: if signedIn() &&
+          request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds;
+      }
+      match /memories/{memId} {
+        allow read, create: if signedIn() &&
+          request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds;
+      }
+      match /music/{doc} {
+        allow read, write: if signedIn() &&
+          request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds;
+      }
+    }
+
+    match /feedback/{id} {
+      allow create: if signedIn();
+      allow read: if isFounder();
+    }
+  }
+}
